@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torchvision import transforms
@@ -17,7 +18,9 @@ import random
 import math
 apex = False
 import spectral
-
+import seaborn as sns
+import pandas as pd
+from matplotlib import patches
 class SupConLoss(nn.Module):
     """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
     It also supports the unsupervised contrastive loss in SimCLR"""
@@ -258,7 +261,7 @@ def train(encoder,Datapath1,Datapath2,PairLabelpath,Datapath,Labelpath,trans,epo
         print(
             'Train Loss: {:.6f}, Acc: {:.6f}, Contrast Loss: {:.6f}'.format(classi_loss / (len(classi_data)), train_acc / (len(classi_data)),contrast_loss / (len(contrast_data))))
         if (train_acc / (len(classi_data)) >= best_acc) and ((classi_loss / (len(classi_data))+contrast_loss / (len(contrast_data))) < best_loss):
-            best_model_wts = copy.deepcopy(model.state_dict())
+            best_model_wts = copy.deepcopy(encoder.state_dict())
             best_acc=train_acc / (len(classi_data))
             best_loss=(classi_loss / (len(classi_data))+contrast_loss / (len(contrast_data)))
     torch.save(best_model_wts, 'model.pth')
@@ -325,8 +328,8 @@ def loadData(name):
         data = sio.loadmat(os.path.join(data_path, 'KSC.mat'))['KSC']
         labels = sio.loadmat(os.path.join(data_path, 'KSC_gt.mat'))['KSC_gt']
     return data, labels
-def PerClassSplit(X, y, perclass, stratify,RandomState):
-    np.random.seed(RandomState)
+def PerClassSplit(X, y, perclass, stratify,randomState=345):
+    np.random.seed(randomState)
     X_train=[]
     y_train=[]
     X_test = []
@@ -357,33 +360,24 @@ def padWithZeros(X, margin=2):
     y_offset = margin
     newX[x_offset:X.shape[0] + x_offset, y_offset:X.shape[1] + y_offset, :] = X
     return newX
+
 def createImageCubes(X, y, windowSize=5, removeZeroLabels=True):
     margin = int((windowSize - 1) / 2)
     zeroPaddedX = padWithZeros(X, margin=margin)
     # split patches
-    # patchesData = np.zeros((X.shape[0] * X.shape[1], windowSize, windowSize, X.shape[2]), dtype=np.float16)
-    # patchesLabels = np.zeros((X.shape[0] * X.shape[1]), dtype=np.float16)
-    patchesData=[]
-    patchesLabels=[]
+    patchesData = np.zeros((X.shape[0] * X.shape[1], windowSize, windowSize, X.shape[2]), dtype=np.float32)
+    patchesLabels = np.zeros((X.shape[0] * X.shape[1]), dtype=np.float32)
+    patchIndex = 0
     for r in range(margin, zeroPaddedX.shape[0] - margin):
         for c in range(margin, zeroPaddedX.shape[1] - margin):
-
-            patch = zeroPaddedX[0:2*margin + 1, c - margin:c + margin + 1]
-            patchesData.append(patch)
-            patchesLabels.append(y[r - margin, c - margin])
-        zeroPaddedX=np.delete(zeroPaddedX,0,axis=0)
-    del zeroPaddedX
+            patch = zeroPaddedX[r - margin:r + margin + 1, c - margin:c + margin + 1]
+            patchesData[patchIndex, :, :, :] = patch
+            patchesLabels[patchIndex] = y[r - margin, c - margin]
+            patchIndex = patchIndex + 1
     if removeZeroLabels:
-        indexList=[i for i in range(len(patchesLabels)) if patchesLabels[i] == 0]
-        k=0
-        for index in indexList:
-            del patchesData[index-k]
-            k+=1
-        k=0
-        for index in indexList:
-            del patchesLabels[index-k]
-            k+=1
-        patchesLabels = [i - 1 for i in patchesLabels]
+        patchesData = patchesData[patchesLabels > 0, :, :, :]
+        patchesLabels = patchesLabels[patchesLabels > 0]
+        patchesLabels -= 1
     return patchesData, patchesLabels
 def AA_andEachClassAccuracy(confusion_matrix):
     counter = confusion_matrix.shape[0]
@@ -423,7 +417,7 @@ def reports(model,Datapath, Labelpath, name):
     score = evaluate(model,Datapath,Labelpath)
     Test_Loss = score[0] * 100
     Test_accuracy = score[1] * 100
-    return classification, confusion, Test_Loss, Test_accuracy, oa * 100, each_acc * 100, aa * 100, kappa
+    return classification, confusion, Test_Loss, Test_accuracy, oa * 100, each_acc * 100, aa * 100, kappa, target_names
 class PairDataset(torch.utils.data.Dataset):#需要继承data.Dataset
     def __init__(self,Datapath1,Datapath2,Labelpath,trans):
         # 1. Initialize file path or list of file names.
@@ -471,38 +465,11 @@ class MYDataset(torch.utils.data.Dataset):#需要继承data.Dataset
     def __len__(self):
         # You should change 0 to the total size of your dataset.
         return len(self.Datalist)
-# def RandomErase(img):
-#     sl = 0.3
-#     sh = 0.4
-#     r1 = 0.3
-#     mean = [0.5, 0.5, 0.5]
-#     for attempt in range(100):
-#         area = img.shape[0] * img.shape[1]
-#
-#         target_area = random.uniform(sl, sh) * area
-#         aspect_ratio = random.uniform(r1, 1 / r1)
-#
-#         h = int(round(math.sqrt(target_area * aspect_ratio)))
-#         w = int(round(math.sqrt(target_area / aspect_ratio)))
-#
-#         if w < img.shape[1] and h < img.shape[0]:
-#             x1 = random.randint(0, img.shape[0] - h)
-#             y1 = random.randint(0, img.shape[1] - w)
-#             for i in range(img.shape[2]):
-#                 img[x1:x1 + h, y1:y1 + w,i] = 0.5
-#             return img
-#     return img
-# def TimesGaussian(Vector):
-#     Temp=Vector.reshape(-1,Vector.shape[2])
-#     NoiseDistortion = np.random.multivariate_normal(mean=np.ones(Vector.shape[2]),cov=0.01*np.eye(Vector.shape[2]))
-#     DistortionMatrix=np.tile(NoiseDistortion,[Temp.shape[0],1])
-#     NewTemp=Temp*DistortionMatrix
-#     OutVector=NewTemp.reshape(Vector.shape[0],Vector.shape[1],Vector.shape[2])
-#     return OutVector
+
 dataset_names = ['IP', 'SA', 'PU']
 parser = argparse.ArgumentParser(description="Run deep learning experiments on"
                                              " various hyperspectral datasets")
-parser.add_argument('--dataset', type=str, default='SA', choices=dataset_names,
+parser.add_argument('--dataset', type=str, default='PU', choices=dataset_names,
                     help="Dataset to use.")
 parser.add_argument('--train',type=bool, default=1)
 parser.add_argument('--perclass', type=float, default=300)# 会除以100
@@ -538,32 +505,23 @@ trans = transforms.Compose(transforms = [
     transforms.ToTensor(),
     transforms.Normalize(np.zeros(K),np.ones(K))
 ])
+
+
 X, pca = applyPCA(X, numComponents=K)
-X, y = createImageCubes(X.astype('float16'), y, windowSize=windowSize)
+X, y = createImageCubes(X, y, windowSize=windowSize)
 def feature_normalize(data):
     mu = np.mean(data,axis=0)
     std = np.std(data,axis=0)
-    return (data - mu)/std
-X=feature_normalize(np.asarray(X).astype('float16'))
+    return truediv((data - mu),std)
+X=feature_normalize(X)
 stratify=np.arange(0,output_units,1)
-Xtrain, Xtest, ytrain, ytest = PerClassSplit(X, y, perclass, stratify,RandomState=345)
+Xtrain, Xtest, ytrain, ytest = PerClassSplit(X, y, perclass, stratify,randomState=None)
 del X
 np.save('Xtrain.npy',Xtrain)
 np.save('ytrain.npy',ytrain)
 np.save('Xtest.npy',Xtest)
 np.save('ytest.npy',ytest)
 del Xtest, ytest
-# Xtrain_aug=[]
-# Xtrain_distort=[]
-# for img in Xtrain:
-#     Xtrain_aug.append(RandomErase(img))
-#     Xtrain_distort.append(TimesGaussian(img))
-# np.save('Xtrain_aug.npy',Xtrain_aug)
-# np.save('Xtrain_distort.npy',Xtrain_distort)
-# Aug_train=Xtrain+Xtrain_aug
-# Aug_trainy=ytrain+ytrain
-# np.save('Aug_train.npy',Aug_train)
-# np.save('Aug_trainy.npy',Aug_trainy)
 del Xtrain
 
 datalist1=[]
@@ -614,12 +572,29 @@ print()
 print('training time:',train_end_time-train_start_time,'s')
 print()
 print('testing time:',test_end_time-test_start_time,'s')
-classification, confusion, Test_loss, Test_accuracy, oa, each_acc, aa, kappa = reports(model,Datapath, Labelpath, dataset)
-add_info=[dataset,perclass,oa,kappa,aa,train_end_time-train_start_time,test_end_time-test_start_time]
-csvFile = open("Final_Experiment.csv", "a")
-writer = csv.writer(csvFile)
-writer.writerow(add_info)
-csvFile.close()
+classification, confusion, Test_loss, Test_accuracy, oa, each_acc, aa, kappa,target_names = reports(model,Datapath, Labelpath, dataset)
+
+sns.set(font_scale=1)
+cf=pd.DataFrame(confusion, index = np.arange(0,output_units,1),
+                  columns = np.arange(0,output_units,1))
+plt.figure(figsize=(10,10), dpi= 300)
+ax=sns.heatmap(cf, square=True,cmap='YlGnBu', center=0, linewidths=1,annot=True,annot_kws={'size':10},fmt='g')
+ax.set_ylim([output_units, 0])
+
+# Decorations
+plt.title('Confusion Matrix ('+dataset+')', fontsize=20)
+plt.xticks(fontsize=13)
+plt.yticks(fontsize=13)
+plt.savefig(dataset+'Confusion.pdf', bbox_inches='tight',dpi=300)
+plt.show()
+
+
+
+# add_info=[dataset,perclass,oa,kappa,aa,train_end_time-train_start_time,test_end_time-test_start_time]
+# csvFile = open("Final_Experiment.csv", "a")
+# writer = csv.writer(csvFile)
+# writer.writerow(add_info)
+# csvFile.close()
 # SaveFeature(model,Datapath,Labelpath)
 # file_name = dataset+'_'+str(perclass)+"perclass.txt"
 # with open(file_name, 'w') as x_file:
@@ -640,40 +615,54 @@ csvFile.close()
 #     x_file.write('{}'.format(confusion.astype(str)))
 #
 #
-# def Patch(data, height_index, width_index):
-#     height_slice = slice(height_index, height_index + PATCH_SIZE)
-#     width_slice = slice(width_index, width_index + PATCH_SIZE)
-#     patch = data[height_slice, width_slice, :]
+def Patch(data, height_index, width_index):
+    height_slice = slice(height_index, height_index + PATCH_SIZE)
+    width_slice = slice(width_index, width_index + PATCH_SIZE)
+    patch = data[height_slice, width_slice, :]
+
+    return patch
+
+
+# load the original image
+X, y = loadData(dataset)
+height = y.shape[0]
+width = y.shape[1]
+PATCH_SIZE = windowSize
+numComponents = K
+X, pca = applyPCA(X, numComponents=numComponents)
+X = padWithZeros(X, PATCH_SIZE // 2)
+# calculate the predicted image
+outputs = np.zeros((height, width))
+for i in range(height):
+    for j in range(width):
+        target = int(y[i, j])
+        if target == 0:
+            continue
+        else:
+            image_patch = Patch(X, i, j)
+            X_test_image = image_patch.reshape(1,image_patch.shape[0], image_patch.shape[1],image_patch.shape[2]).astype('float32')
+            np.save('WholePic.npy',X_test_image)
+            Datapath='WholePic.npy'
+            Labelpath='WholePic.npy'
+            prediction = (predict(model,Datapath,Labelpath))
+            Prediction = np.argmax(np.array(prediction), axis=1)
+            outputs[i][j] = Prediction +1
+all_target=['untruthed']+target_names
+labelPatches = [ patches.Patch(color=spectral.spy_colors[x]/255.,
+                 label=all_target[x]) for x in np.unique(y) ]
+
+ground_truth = spectral.imshow(classes=y, figsize=(10, 10))
+plt.legend(handles=labelPatches, ncol=2, fontsize='medium',
+           loc='upper center', bbox_to_anchor=(0.5, -0.05));
+plt.savefig(str(dataset) + "_ground_truth.pdf", bbox_inches='tight',dpi=300)
+
+labelPatches2 = [ patches.Patch(color=spectral.spy_colors[x]/255.,
+                 label=all_target[x]) for x in np.unique(outputs.astype(int)) ]
+predict_image = spectral.imshow(classes=outputs.astype(int), figsize=(10, 10))
+plt.legend(handles=labelPatches2, ncol=2, fontsize='medium',
+           loc='upper center', bbox_to_anchor=(0.5, -0.05));
+plt.savefig(str(dataset) + "_predictions.pdf", bbox_inches='tight',dpi=300)
 #
-#     return patch
-#
-#
-# # load the original image
-# X, y = loadData(dataset)
-# height = y.shape[0]
-# width = y.shape[1]
-# PATCH_SIZE = windowSize
-# numComponents = K
-# X, pca = applyPCA(X, numComponents=numComponents)
-# X = padWithZeros(X, PATCH_SIZE // 2)
-# # calculate the predicted image
-# outputs = np.zeros((height, width))
-# for i in range(height):
-#     for j in range(width):
-#         target = int(y[i, j])
-#         if target == 0:
-#             continue
-#         else:
-#             image_patch = Patch(X, i, j)
-#             X_test_image = image_patch.reshape(1,image_patch.shape[0], image_patch.shape[1],image_patch.shape[2]).astype('float32')
-#             np.save('WholePic.npy',X_test_image)
-#             Datapath='WholePic.npy'
-#             Labelpath='WholePic.npy'
-#             prediction = (predict(model,Datapath,Labelpath))
-#             prediction = np.argmax(np.array(prediction), axis=1)
-#             outputs[i][j] = prediction + 1
-# ground_truth = spectral.imshow(classes=y, figsize=(7, 7))
-# predict_image = spectral.imshow(classes=outputs.astype(int), figsize=(7, 7))
-# spectral.save_rgb(dataset+'_'+str(perclass)+"perclass_predictions.jpg", outputs.astype(int), colors=spectral.spy_colors)
+# spectral.save_rgb(dataset+'_'+str(perclass)+"_predictions.jpg", outputs.astype(int), colors=spectral.spy_colors)
 # spectral.save_rgb(str(dataset) + "_ground_truth.jpg", y, colors=spectral.spy_colors)
-# torch.cuda.empty_cache()
+torch.cuda.empty_cache()
